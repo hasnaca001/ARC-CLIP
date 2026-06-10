@@ -57,10 +57,23 @@ class ARCPairs(Dataset):
         return demos, prog
 
 
-def info_nce(v, p, temperature=TEMPERATURE):
-    # v, p are already length-1, so v @ p.T is the cosine-similarity matrix.
+def info_nce(v, p, prog_ids, temperature=TEMPERATURE):
+    # v, p are length-1, so v @ p.T is the cosine-similarity matrix.
     logits = v @ p.t() / temperature                # (B, B)
-    labels = torch.arange(v.size(0), device=v.device)  # correct match = diagonal
+    B = v.size(0)
+    labels = torch.arange(B, device=v.device)       # correct match = diagonal
+
+    # ---- collision fix --------------------------------------------------
+    # Our small DSL means a batch often contains the SAME program twice.
+    # Plain InfoNCE would punish those duplicates as "wrong" negatives, even
+    # though they are actually correct. We find off-diagonal pairs that have
+    # an identical program and remove them from the comparison (set their
+    # similarity to -inf), so they count as neither positive nor negative.
+    same = (prog_ids.unsqueeze(1) == prog_ids.unsqueeze(0)).all(dim=2)  # (B,B)
+    duplicates = same & ~torch.eye(B, dtype=torch.bool, device=v.device)
+    logits = logits.masked_fill(duplicates, float("-inf"))
+    # ---------------------------------------------------------------------
+
     loss_demos_to_prog = F.cross_entropy(logits, labels)
     loss_prog_to_demos = F.cross_entropy(logits.t(), labels)
     loss = (loss_demos_to_prog + loss_prog_to_demos) / 2
@@ -69,6 +82,7 @@ def info_nce(v, p, temperature=TEMPERATURE):
 
 
 def main():
+    torch.manual_seed(0)            # reproducible runs (less noise between runs)
     dataset = ARCPairs()
     loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
@@ -90,7 +104,7 @@ def main():
 
             v = phi_v(demos)
             p = phi_p(progs)
-            loss, acc = info_nce(v, p)
+            loss, acc = info_nce(v, p, progs)
 
             optimizer.zero_grad()
             loss.backward()
