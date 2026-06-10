@@ -24,25 +24,37 @@ EMBED_DIM = 128   # the size of the shared embedding space
 # phi_v : the VISION encoder (a small CNN over the demonstration pairs)
 # ---------------------------------------------------------------------------
 class VisionEncoder(nn.Module):
+    """phi_v -- now SPATIALLY AWARE.
+
+    The previous version ended with global average pooling, which averages over
+    every position. That made it blind to orientation: a left-right flip and an
+    up-down flip produce the SAME average, so the model literally could not tell
+    them apart. Here we KEEP the spatial feature map and flatten it, so the
+    network can reason about WHERE pixels moved -- which is the essence of
+    identifying a transformation. This is the 2D-structure idea from ViTARC.
+    """
     def __init__(self, d=EMBED_DIM):
         super().__init__()
-        # A CNN reads one demo pair (20 channels) and produces a 64-num feature.
         self.cnn = nn.Sequential(
             nn.Conv2d(20, 32, kernel_size=3, padding=1), nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), nn.ReLU(),  # 30 -> 15
             nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1), nn.ReLU(),  # 15 -> 8
-            nn.AdaptiveAvgPool2d(1),                                           # -> (64,1,1)
         )
-        self.proj = nn.Linear(64, d)
+        # 64 channels x 8 x 8 = 4096 numbers, KEPT (not averaged away).
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 8 * 8, 256), nn.ReLU(),
+            nn.Linear(256, d),
+        )
 
     def forward(self, demos):
         # demos shape: (B, k, 20, 30, 30)   B = batch size, k = number of demos
         B, k, C, H, W = demos.shape
-        x = demos.view(B * k, C, H, W)          # treat every demo as its own image
-        feat = self.cnn(x).view(B * k, 64)      # (B*k, 64)
-        feat = feat.view(B, k, 64).mean(dim=1)  # AVERAGE over the k demos -> (B, 64)
-        v = self.proj(feat)                     # (B, 128)
-        return F.normalize(v, dim=-1)           # make each vector length 1
+        x = demos.view(B * k, C, H, W)            # treat every demo as its own image
+        feat = self.cnn(x)                        # (B*k, 64, 8, 8) -- spatial layout kept
+        feat = self.head(feat)                    # (B*k, 128)
+        feat = feat.view(B, k, -1).mean(dim=1)    # AVERAGE over the k demos -> (B, 128)
+        return F.normalize(feat, dim=-1)          # make each vector length 1
 
 
 # ---------------------------------------------------------------------------
