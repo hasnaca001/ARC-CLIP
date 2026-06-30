@@ -13,7 +13,8 @@ Settings (same library throughout):
 
 Run (after train.py):  python evaluate.py
 """
-
+import warnings
+warnings.filterwarnings("ignore")
 import json
 import random
 import statistics
