@@ -22,6 +22,7 @@ MAX_PROG_TOKENS = 256
 # --------------------------- grids -> tensors ------------------------------
 def grid_to_tensor(grid, canvas=CANVAS):
     g = np.array(grid, dtype=np.int64)
+    g = g[:canvas, :canvas]                      # crop anything larger than the canvas
     h, w = g.shape
     t = torch.zeros(NUM_COLORS, canvas, canvas, dtype=torch.float32)
     for color in range(NUM_COLORS):
